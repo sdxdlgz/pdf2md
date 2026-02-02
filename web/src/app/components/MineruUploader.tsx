@@ -36,6 +36,7 @@ type UploadItem = {
 
 type ModelVersion = "pipeline" | "vlm";
 type PipelineLanguagePreset = "en" | "ch" | "japan" | "custom";
+type DownloadFormat = "zip" | "md" | "json" | "docx";
 
 function humanBytes(bytes: number): string {
   const units = ["B", "KB", "MB", "GB"];
@@ -60,6 +61,9 @@ export default function MineruUploader() {
   const [pipelineLanguageCustom, setPipelineLanguageCustom] = useState("");
 
   const [busy, setBusy] = useState(false);
+  const [batchDownloading, setBatchDownloading] = useState(false);
+  const [batchDownloadFormat, setBatchDownloadFormat] =
+    useState<DownloadFormat>("md");
   const [error, setError] = useState<string | null>(null);
   const [batchId, setBatchId] = useState<string | null>(null);
 
@@ -272,7 +276,7 @@ export default function MineruUploader() {
   ]);
 
   const downloadHref = useCallback(
-    (zipUrl: string, inputName: string, format: "zip" | "md" | "json" | "docx") => {
+    (zipUrl: string, inputName: string, format: DownloadFormat) => {
       const params = new URLSearchParams({
         zipUrl,
         inputName,
@@ -283,16 +287,74 @@ export default function MineruUploader() {
     [],
   );
 
+  const batchDownloadFiles = useMemo(() => {
+    return items
+      .filter((it) => it.mineru?.state === "done")
+      .map((it) => {
+        const zipUrl = it.mineru?.full_zip_url;
+        if (typeof zipUrl !== "string") return null;
+        return { zipUrl, inputName: it.originalName };
+      })
+      .filter((x): x is { zipUrl: string; inputName: string } => Boolean(x));
+  }, [items]);
+
+  const canBatchDownload = useMemo(() => {
+    return (
+      batchDownloadFiles.length > 0 &&
+      !busy &&
+      !batchDownloading
+    );
+  }, [batchDownloadFiles.length, batchDownloading, busy]);
+
+  const startBatchDownload = useCallback(async () => {
+    if (!canBatchDownload) return;
+    setError(null);
+    setBatchDownloading(true);
+
+    try {
+      const res = await fetch("/api/mineru/batch-download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          format: batchDownloadFormat,
+          files: batchDownloadFiles,
+        }),
+      });
+
+      if (!res.ok) {
+        let detail: string | undefined;
+        try {
+          const data = (await res.json()) as { error?: string; detail?: string };
+          detail = data.detail || data.error;
+        } catch {
+          // ignore
+        }
+        throw new Error(detail || `批量下载失败：HTTP ${res.status}`);
+      }
+
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = `pdf2md-${batchDownloadFormat}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Unknown error";
+      setError(message);
+    } finally {
+      setBatchDownloading(false);
+    }
+  }, [batchDownloadFiles, batchDownloadFormat, canBatchDownload]);
+
   return (
     <section className="space-y-6">
       <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-lg font-semibold tracking-tight">上传 PDF → 生成 Markdown / JSON / DOCX</h2>
-            <p className="mt-1 text-sm text-zinc-600">
-              提示：先保存到 Vercel Blob（“上传存储”层），再由服务端调用 Mineru 的{" "}
-              <span className="font-mono">/file-urls/batch</span> 获取上传链接并上传触发解析（“转换”层）。
-            </p>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -421,7 +483,30 @@ export default function MineruUploader() {
 
       <div className="rounded-2xl border border-zinc-200 bg-white shadow-sm">
         <div className="border-b border-zinc-200 px-6 py-4">
-          <h3 className="text-sm font-semibold text-zinc-900">文件列表</h3>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h3 className="text-sm font-semibold text-zinc-900">文件列表</h3>
+            <div className="flex items-center gap-2">
+              <select
+                value={batchDownloadFormat}
+                disabled={busy || batchDownloading || batchDownloadFiles.length === 0}
+                onChange={(e) => setBatchDownloadFormat(e.target.value as DownloadFormat)}
+                className="h-9 rounded-full border border-zinc-200 bg-white px-3 text-sm disabled:bg-zinc-50 disabled:text-zinc-400"
+              >
+                <option value="md">MD</option>
+                <option value="json">JSON</option>
+                <option value="docx">DOCX</option>
+                <option value="zip">ZIP</option>
+              </select>
+              <button
+                type="button"
+                onClick={startBatchDownload}
+                disabled={!canBatchDownload}
+                className="inline-flex h-9 items-center justify-center rounded-full border border-zinc-200 bg-white px-3 text-sm text-zinc-900 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:text-zinc-400"
+              >
+                {batchDownloading ? "打包中…" : "批量下载"}
+              </button>
+            </div>
+          </div>
         </div>
         <div className="divide-y divide-zinc-100">
           {items.length === 0 ? (

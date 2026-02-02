@@ -1,4 +1,4 @@
-import { getFilenameBase, sanitizeAttachmentFilename } from "@/lib/filenames";
+import { buildContentDispositionAttachment, getFilenameBase } from "@/lib/filenames";
 import { PassThrough, Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import type { File } from "unzipper";
@@ -182,13 +182,9 @@ export async function GET(request: Request) {
   if (formatParam === "zip") {
     try {
       const res = await fetchZip(zipUrl.toString());
-      const filename = sanitizeAttachmentFilename(`${base}.zip`);
       const headers = new Headers();
       headers.set("Content-Type", "application/zip");
-      headers.set(
-        "Content-Disposition",
-        `attachment; filename="${filename}"`,
-      );
+      headers.set("Content-Disposition", buildContentDispositionAttachment(`${base}.zip`));
       headers.set("Cache-Control", "no-store");
       return new Response(res.body, { status: 200, headers });
     } catch (err) {
@@ -227,14 +223,9 @@ export async function GET(request: Request) {
           ? "application/json; charset=utf-8"
           : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
-    const filename = sanitizeAttachmentFilename(`${base}${extension}`);
-
     const headers = new Headers();
     headers.set("Content-Type", contentType);
-    headers.set(
-      "Content-Disposition",
-      `attachment; filename="${filename}"`,
-    );
+    headers.set("Content-Disposition", buildContentDispositionAttachment(`${base}${extension}`));
     headers.set("Cache-Control", "no-store");
     if (typeof file.uncompressedSize === "number" && file.uncompressedSize > 0) {
       headers.set("Content-Length", String(file.uncompressedSize));

@@ -14,3 +14,19 @@ export function sanitizeAttachmentFilename(name: string): string {
   return noSeparators.slice(0, 180) || "download";
 }
 
+function encodeRFC5987ValueChars(value: string): string {
+  return encodeURIComponent(value).replace(/[()*']/g, (c) =>
+    `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+export function buildContentDispositionAttachment(filename: string): string {
+  const sanitized = sanitizeAttachmentFilename(filename);
+  const asciiFallback =
+    sanitized
+      .replace(/[^\x20-\x7E]/g, "_")
+      .replace(/["\\]/g, "_")
+      .trim() || "download";
+  const encoded = encodeRFC5987ValueChars(sanitized);
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
+}
