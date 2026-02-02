@@ -64,13 +64,29 @@ export default function MineruUploader() {
   const [batchId, setBatchId] = useState<string | null>(null);
 
   const pollTimer = useRef<number | null>(null);
+  const activeBatchIdRef = useRef<string | null>(null);
 
   const resetPoll = useCallback(() => {
     if (pollTimer.current) {
       window.clearTimeout(pollTimer.current);
       pollTimer.current = null;
     }
+    activeBatchIdRef.current = null;
   }, []);
+
+  const removeItem = useCallback(
+    (dataId: string) => {
+      setItems((prev) => {
+        const next = prev.filter((p) => p.dataId !== dataId);
+        if (next.length === 0) {
+          resetPoll();
+          setBatchId(null);
+        }
+        return next;
+      });
+    },
+    [resetPoll],
+  );
 
   const onChooseFiles = useCallback((files: FileList | null) => {
     resetPoll();
@@ -202,12 +218,15 @@ export default function MineruUploader() {
       }
 
       setBatchId(json.batchId);
+      activeBatchIdRef.current = json.batchId;
 
       // 3) Poll batch status
       const poll = async (id: string) => {
+        if (activeBatchIdRef.current !== id) return;
         const r = await fetch(`/api/mineru/batch/${encodeURIComponent(id)}`, {
           cache: "no-store",
         });
+        if (activeBatchIdRef.current !== id) return;
         const data = (await r.json()) as { results?: MineruResult[]; error?: string; detail?: string };
         if (!r.ok || !Array.isArray(data.results)) {
           throw new Error(data.detail || data.error || "Failed to fetch batch results.");
@@ -228,7 +247,7 @@ export default function MineruUploader() {
         const done = (data.results ?? []).every(
           (x) => x.state === "done" || x.state === "failed",
         );
-        if (!done) {
+        if (!done && activeBatchIdRef.current === id) {
           pollTimer.current = window.setTimeout(() => poll(id), 2500);
         }
       };
@@ -271,7 +290,8 @@ export default function MineruUploader() {
           <div>
             <h2 className="text-lg font-semibold tracking-tight">上传 PDF → 生成 Markdown / JSON / DOCX</h2>
             <p className="mt-1 text-sm text-zinc-600">
-              文件会先上传到 Vercel Blob（统一存储），然后用 Mineru API 解析并产出结果。
+              提示：先保存到 Vercel Blob（“上传存储”层），再由服务端调用 Mineru 的{" "}
+              <span className="font-mono">/file-urls/batch</span> 获取上传链接并上传触发解析（“转换”层）。
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -477,6 +497,16 @@ export default function MineruUploader() {
                       >
                         DOCX
                       </a>
+                      <button
+                        type="button"
+                        title="删除"
+                        aria-label={`删除 ${it.originalName}`}
+                        disabled={busy}
+                        onClick={() => removeItem(it.dataId)}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50 hover:text-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:text-zinc-300"
+                      >
+                        ×
+                      </button>
                     </div>
                   </div>
                 </div>

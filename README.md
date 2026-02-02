@@ -23,6 +23,15 @@
 - `BLOB_READ_WRITE_TOKEN`
   - Vercel Blob 的 Read‑Write Token（用于浏览器直传到 Blob）
 
+## 环境变量（可选）
+
+- `NEXT_PUBLIC_DONATE_URL`
+  - 赞赏码/打赏链接（通常是图床图片地址）
+  - 页面底部显示「打赏一下！」链接
+- `NEXT_PUBLIC_GITHUB_URL`
+  - GitHub 仓库链接
+  - 页面底部显示 GitHub 图标链接
+
 ### 在 Vercel 上配置（推荐流程）
 
 1. 在 Vercel 导入仓库后，先把项目 **Root Directory** 设置为 `web`。
@@ -32,6 +41,8 @@
 3. 添加环境变量：
    - `MINERU_API_TOKEN`：填 Mineru Token
    - `BLOB_READ_WRITE_TOKEN`：填 Blob Read‑Write Token
+   - （可选）`NEXT_PUBLIC_DONATE_URL`：赞赏码/打赏链接
+   - （可选）`NEXT_PUBLIC_GITHUB_URL`：GitHub 仓库链接
 4. 选择需要生效的环境（Production / Preview / Development），保存后重新部署。
 
 ### 本地开发配置
