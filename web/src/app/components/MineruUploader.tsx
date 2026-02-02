@@ -35,6 +35,7 @@ type UploadItem = {
 };
 
 type ModelVersion = "pipeline" | "vlm";
+type PipelineLanguagePreset = "en" | "ch" | "japan" | "custom";
 
 function humanBytes(bytes: number): string {
   const units = ["B", "KB", "MB", "GB"];
@@ -54,7 +55,9 @@ export default function MineruUploader() {
   const [isOcr, setIsOcr] = useState(false);
   const [enableFormula, setEnableFormula] = useState(true);
   const [enableTable, setEnableTable] = useState(true);
-  const [language, setLanguage] = useState("ch");
+  const [pipelineLanguage, setPipelineLanguage] =
+    useState<PipelineLanguagePreset>("en");
+  const [pipelineLanguageCustom, setPipelineLanguageCustom] = useState("");
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -104,10 +107,33 @@ export default function MineruUploader() {
     setBatchId(null);
 
     try {
+      setItems((prev) => prev.map((p) => ({ ...p, mineru: undefined })));
+
+      const effectiveLanguage =
+        modelVersion === "pipeline"
+          ? pipelineLanguage === "custom"
+            ? pipelineLanguageCustom.trim()
+            : pipelineLanguage
+          : undefined;
+
+      if (modelVersion === "pipeline" && !effectiveLanguage) {
+        throw new Error("请选择 pipeline 语言（或输入自定义语言）。");
+      }
+
       // 1) Upload files to Vercel Blob
       const uploaded: UploadItem[] = [];
 
       for (const item of items) {
+        if (item.blobUrl) {
+          uploaded.push({ ...item, uploadProgress: 100 });
+          setItems((prev) =>
+            prev.map((p) =>
+              p.dataId === item.dataId ? { ...p, uploadProgress: 100 } : p,
+            ),
+          );
+          continue;
+        }
+
         setItems((prev) =>
           prev.map((p) =>
             p.dataId === item.dataId ? { ...p, uploadProgress: 0 } : p,
@@ -166,7 +192,7 @@ export default function MineruUploader() {
           is_ocr: isOcr,
           enable_formula: enableFormula,
           enable_table: enableTable,
-          language,
+          language: effectiveLanguage,
         }),
       });
 
@@ -220,8 +246,9 @@ export default function MineruUploader() {
     includeDocx,
     isOcr,
     items,
-    language,
     modelVersion,
+    pipelineLanguage,
+    pipelineLanguageCustom,
     resetPoll,
   ]);
 
@@ -288,14 +315,33 @@ export default function MineruUploader() {
               </label>
 
               <label className="block">
-                <span className="text-sm font-medium text-zinc-900">语言</span>
-                <input
-                  value={language}
-                  disabled={busy}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm"
-                  placeholder="ch"
-                />
+                <span className="text-sm font-medium text-zinc-900">
+                  pipeline 语言
+                </span>
+                <select
+                  value={pipelineLanguage}
+                  disabled={busy || modelVersion === "vlm"}
+                  onChange={(e) =>
+                    setPipelineLanguage(
+                      e.target.value as PipelineLanguagePreset,
+                    )
+                  }
+                  className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm disabled:bg-zinc-100"
+                >
+                  <option value="en">en</option>
+                  <option value="ch">ch</option>
+                  <option value="japan">japan</option>
+                  <option value="custom">其他…</option>
+                </select>
+                {modelVersion === "pipeline" && pipelineLanguage === "custom" ? (
+                  <input
+                    value={pipelineLanguageCustom}
+                    disabled={busy}
+                    onChange={(e) => setPipelineLanguageCustom(e.target.value)}
+                    className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm"
+                    placeholder="输入语言代码（例如: fr、de、korean...）"
+                  />
+                ) : null}
               </label>
             </div>
 

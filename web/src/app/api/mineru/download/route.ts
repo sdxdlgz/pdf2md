@@ -1,17 +1,19 @@
 import { getFilenameBase, sanitizeAttachmentFilename } from "@/lib/filenames";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
-import Parse from "unzipper/lib/parse.js";
-import type { Entry } from "unzipper";
+import type { File } from "unzipper";
+import directory from "unzipper/lib/Open/directory.js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 type OutputFormat = "zip" | "md" | "json" | "docx";
 
 function isAllowedOutputFormat(value: string | null): value is OutputFormat {
-  return value === "zip" || value === "md" || value === "json" || value === "docx";
+  return (
+    value === "zip" || value === "md" || value === "json" || value === "docx"
+  );
 }
 
 function isAllowedZipUrl(url: URL): boolean {
@@ -33,79 +35,116 @@ async function fetchZip(zipUrl: string): Promise<Response> {
   return res;
 }
 
-async function pickBestEntryPath(options: {
-  zipUrl: string;
+async function getRemoteZipSize(zipUrl: string): Promise<number> {
+  const head = await fetch(zipUrl, { method: "HEAD" });
+  if (head.ok) {
+    const sizeHeader = head.headers.get("content-length");
+    if (sizeHeader) {
+      const parsed = Number(sizeHeader);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+  }
+
+  const rangeRes = await fetch(zipUrl, {
+    method: "GET",
+    headers: { Range: "bytes=0-0" },
+  });
+  if (!rangeRes.ok) {
+    throw new Error(
+      `Failed to get zip size: HTTP ${rangeRes.status} ${rangeRes.statusText}`,
+    );
+  }
+
+  const contentRange = rangeRes.headers.get("content-range");
+  if (contentRange) {
+    const total = Number(contentRange.split("/")[1]);
+    if (Number.isFinite(total) && total > 0) return total;
+  }
+
+  const sizeHeader = rangeRes.headers.get("content-length");
+  if (sizeHeader) {
+    const parsed = Number(sizeHeader);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+
+  throw new Error("Failed to determine zip size.");
+}
+
+function createRemoteZipRangeStream(
+  zipUrl: string,
+  offset: number,
+  length?: number,
+): PassThrough {
+  const pass = new PassThrough();
+  const end = typeof length === "number" ? offset + length : "";
+  const range = `bytes=${offset}-${end}`;
+
+  void fetch(zipUrl, {
+    method: "GET",
+    headers: { Range: range },
+    cache: "no-store",
+  })
+    .then((res) => {
+      if (!res.ok) {
+        throw new Error(
+          `Range fetch failed: HTTP ${res.status} ${res.statusText}`,
+        );
+      }
+      if (!res.body) {
+        pass.end();
+        return;
+      }
+
+      const nodeBody = res.body as unknown as NodeReadableStream<Uint8Array>;
+      Readable.fromWeb(nodeBody).pipe(pass);
+    })
+    .catch((err: unknown) => {
+      pass.destroy(err instanceof Error ? err : new Error("Range fetch failed."));
+    });
+
+  return pass;
+}
+
+async function listRemoteZipFiles(zipUrl: string): Promise<File[]> {
+  const source = {
+    stream: (offset: number, length?: number) =>
+      createRemoteZipRangeStream(zipUrl, offset, length),
+    size: async () => getRemoteZipSize(zipUrl),
+  };
+
+  type DirectoryResult = { files: Promise<File[]> };
+  type DirectoryFn = (source: unknown, options: { tailSize: number }) => Promise<DirectoryResult>;
+
+  const dir = await (directory as unknown as DirectoryFn)(source, {
+    tailSize: 128 * 1024,
+  });
+
+  return dir.files;
+}
+
+function pickBestFile(options: {
+  files: File[];
   extension: string;
   expectedFileName?: string;
-}): Promise<string | null> {
-  const res = await fetchZip(options.zipUrl);
-  if (!res.body) return null;
+}): File | null {
+  const extensionLower = options.extension.toLowerCase();
+  const expectedLower = options.expectedFileName?.toLowerCase();
 
-  const nodeBody = res.body as unknown as NodeReadableStream<Uint8Array>;
-  const nodeStream = Readable.fromWeb(nodeBody);
-  const parser = nodeStream.pipe(Parse({ forceStream: true })) as unknown as AsyncIterable<Entry>;
-
-  type Candidate = { path: string; size: number; exact: boolean };
-  const candidates: Candidate[] = [];
-
-  for await (const entry of parser) {
-    const entryType = String(entry.type ?? "");
-    const entryPath = String(entry.path ?? "");
-    if (entryType !== "File" || !entryPath) {
-      entry.autodrain();
-      continue;
-    }
-
-    const lowerPath = entryPath.toLowerCase();
-    if (!lowerPath.endsWith(options.extension.toLowerCase())) {
-      entry.autodrain();
-      continue;
-    }
-
-    const size =
-      typeof entry.extra?.uncompressedSize === "number"
-        ? entry.extra.uncompressedSize
-        : typeof entry.vars?.compressedSize === "number"
-          ? entry.vars.compressedSize
-          : 0;
-
-    const exact = Boolean(
-      options.expectedFileName &&
-        lowerPath.endsWith(options.expectedFileName.toLowerCase()),
-    );
-
-    candidates.push({ path: entryPath, size, exact });
-    entry.autodrain();
-  }
+  const candidates = options.files
+    .filter((f) => f.type === "File")
+    .filter((f) => f.path.toLowerCase().endsWith(extensionLower))
+    .map((f) => {
+      const lowerPath = f.path.toLowerCase();
+      const exact = Boolean(expectedLower && lowerPath.endsWith(expectedLower));
+      return { file: f, exact };
+    });
 
   if (candidates.length === 0) return null;
   const exactMatches = candidates.filter((c) => c.exact);
   const pool = exactMatches.length > 0 ? exactMatches : candidates;
-  pool.sort((a, b) => b.size - a.size);
-  return pool[0]?.path ?? null;
-}
 
-async function streamZipEntry(options: {
-  zipUrl: string;
-  entryPath: string;
-}): Promise<ReadableStream<Uint8Array>> {
-  const res = await fetchZip(options.zipUrl);
-  if (!res.body) throw new Error("Zip response has no body.");
-
-  const nodeBody = res.body as unknown as NodeReadableStream<Uint8Array>;
-  const nodeStream = Readable.fromWeb(nodeBody);
-  const parser = nodeStream.pipe(Parse({ forceStream: true })) as unknown as AsyncIterable<Entry>;
-
-  for await (const entry of parser) {
-    const entryType = String(entry.type ?? "");
-    const entryPath = String(entry.path ?? "");
-    if (entryType === "File" && entryPath === options.entryPath) {
-      return Readable.toWeb(entry) as unknown as ReadableStream<Uint8Array>;
-    }
-    entry.autodrain();
-  }
-
-  throw new Error("Entry not found in zip.");
+  pool.sort((a, b) => (b.file.uncompressedSize || 0) - (a.file.uncompressedSize || 0));
+  return pool[0]?.file ?? null;
 }
 
 export async function GET(request: Request) {
@@ -165,22 +204,21 @@ export async function GET(request: Request) {
   const expectedFileName = `${base}${extension}`;
 
   try {
-    const entryPath = await pickBestEntryPath({
-      zipUrl: zipUrl.toString(),
+    const files = await listRemoteZipFiles(zipUrl.toString());
+    const file = pickBestFile({
+      files,
       extension,
       expectedFileName,
     });
-    if (!entryPath) {
+    if (!file) {
       return Response.json(
         { error: `No ${formatParam} found in zip.` },
         { status: 404 },
       );
     }
 
-    const stream = await streamZipEntry({
-      zipUrl: zipUrl.toString(),
-      entryPath,
-    });
+    const nodeStream = file.stream();
+    const stream = Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
 
     const contentType =
       formatParam === "md"
@@ -198,6 +236,9 @@ export async function GET(request: Request) {
       `attachment; filename="${filename}"`,
     );
     headers.set("Cache-Control", "no-store");
+    if (typeof file.uncompressedSize === "number" && file.uncompressedSize > 0) {
+      headers.set("Content-Length", String(file.uncompressedSize));
+    }
 
     return new Response(stream, { status: 200, headers });
   } catch (err) {

@@ -8,22 +8,6 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-type CreateBatchBody = {
-  files: Array<{
-    name: string;
-    blobUrl?: string;
-    blobDownloadUrl?: string;
-    data_id?: string;
-  }>;
-  model_version?: MineruModelVersion;
-  extra_formats?: MineruExtraFormat[];
-  is_ocr?: boolean;
-  enable_formula?: boolean;
-  enable_table?: boolean;
-  language?: string;
-  page_ranges?: string;
-};
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -223,7 +207,16 @@ export async function POST(request: Request) {
   const booleanOrUndefined = (v: unknown) =>
     typeof v === "boolean" ? v : undefined;
 
-  const language = typeof body.language === "string" ? body.language : undefined;
+  const language =
+    model_version === "pipeline" && typeof body.language === "string"
+      ? body.language
+      : undefined;
+  if (model_version === "pipeline" && !language) {
+    return NextResponse.json(
+      { error: "`language` is required when model_version is pipeline." },
+      { status: 400 },
+    );
+  }
   const page_ranges =
     typeof body.page_ranges === "string" ? body.page_ranges : undefined;
 

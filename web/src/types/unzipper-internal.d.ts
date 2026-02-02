@@ -5,3 +5,7 @@ declare module "unzipper/lib/parse.js" {
   export default Parse;
 }
 
+declare module "unzipper/lib/Open/directory.js" {
+  const directory: unknown;
+  export default directory;
+}
