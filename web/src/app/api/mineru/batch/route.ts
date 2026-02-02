@@ -9,7 +9,12 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 type CreateBatchBody = {
-  files: Array<{ name: string; blobUrl: string; data_id?: string }>;
+  files: Array<{
+    name: string;
+    blobUrl?: string;
+    blobDownloadUrl?: string;
+    data_id?: string;
+  }>;
   model_version?: MineruModelVersion;
   extra_formats?: MineruExtraFormat[];
   is_ocr?: boolean;
@@ -41,14 +46,46 @@ function isAllowedStoredFileUrl(url: URL): boolean {
   return host === "blob.vercel-storage.com" || host.endsWith(".blob.vercel-storage.com");
 }
 
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchStoredFileWithRetries(sourceUrl: string): Promise<Response> {
+  const maxAttempts = 4;
+  const retryableStatuses = new Set([502, 503, 504]);
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const res = await fetch(sourceUrl, { method: "GET", cache: "no-store" });
+      if (res.ok) return res;
+      if (!retryableStatuses.has(res.status) || attempt === maxAttempts) {
+        return res;
+      }
+      const delayMs = 500 * Math.pow(2, attempt - 1);
+      await sleep(delayMs);
+    } catch (err) {
+      lastError = err;
+      if (attempt === maxAttempts) break;
+      const delayMs = 500 * Math.pow(2, attempt - 1);
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Failed to fetch stored file.");
+}
+
 async function uploadUrlToMineruPutUrl(input: {
   sourceUrl: string;
   putUrl: string;
 }): Promise<void> {
-  const sourceRes = await fetch(input.sourceUrl, { method: "GET" });
+  const sourceRes = await fetchStoredFileWithRetries(input.sourceUrl);
   if (!sourceRes.ok) {
+    const bodyPreview = await sourceRes.text().catch(() => "");
     throw new Error(
-      `Failed to fetch stored file: HTTP ${sourceRes.status} ${sourceRes.statusText}`,
+      `Failed to fetch stored file: HTTP ${sourceRes.status} ${sourceRes.statusText}${bodyPreview ? `: ${bodyPreview.slice(0, 200)}` : ""}`,
     );
   }
   if (!sourceRes.body) {
@@ -122,27 +159,32 @@ export async function POST(request: Request) {
     );
   }
 
-  const files: CreateBatchBody["files"] = [];
+  const files: Array<{ name: string; sourceUrl: string; data_id?: string }> = [];
   for (const file of body.files) {
     if (
       !isRecord(file) ||
       typeof file.name !== "string" ||
       !file.name ||
-      typeof file.blobUrl !== "string" ||
-      !file.blobUrl
+      (typeof file.blobUrl !== "string" || !file.blobUrl) &&
+        (typeof file.blobDownloadUrl !== "string" || !file.blobDownloadUrl)
     ) {
       return NextResponse.json(
-        { error: "Each file must include `name` and `blobUrl` strings." },
+        { error: "Each file must include `name` and (`blobUrl` or `blobDownloadUrl`)." },
         { status: 400 },
       );
     }
 
+    const sourceUrl =
+      typeof file.blobDownloadUrl === "string" && file.blobDownloadUrl
+        ? file.blobDownloadUrl
+        : (file.blobUrl as string);
+
     let parsedUrl: URL;
     try {
-      parsedUrl = new URL(file.blobUrl);
+      parsedUrl = new URL(sourceUrl);
     } catch {
       return NextResponse.json(
-        { error: `Invalid blobUrl: ${file.blobUrl}` },
+        { error: `Invalid blob URL: ${sourceUrl}` },
         { status: 400 },
       );
     }
@@ -167,7 +209,7 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    files.push({ name: file.name, blobUrl: file.blobUrl, data_id });
+    files.push({ name: file.name, sourceUrl, data_id });
   }
 
   const model_version = isAllowedModelVersion(body.model_version)
@@ -208,9 +250,9 @@ export async function POST(request: Request) {
 
     await mapWithConcurrency(
       files,
-      3,
+      1,
       async (file, index) =>
-        uploadUrlToMineruPutUrl({ sourceUrl: file.blobUrl, putUrl: fileUrls[index] }),
+        uploadUrlToMineruPutUrl({ sourceUrl: file.sourceUrl, putUrl: fileUrls[index] }),
     );
 
     return NextResponse.json({ batchId });

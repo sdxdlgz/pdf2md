@@ -29,6 +29,7 @@ type UploadItem = {
   originalName: string;
   file: File;
   blobUrl?: string;
+  blobDownloadUrl?: string;
   uploadProgress: number;
   mineru?: MineruResult;
 };
@@ -129,11 +130,21 @@ export default function MineruUploader() {
           },
         });
 
-        uploaded.push({ ...item, blobUrl: blob.url, uploadProgress: 100 });
+        uploaded.push({
+          ...item,
+          blobUrl: blob.url,
+          blobDownloadUrl: blob.downloadUrl,
+          uploadProgress: 100,
+        });
         setItems((prev) =>
           prev.map((p) =>
             p.dataId === item.dataId
-              ? { ...p, blobUrl: blob.url, uploadProgress: 100 }
+              ? {
+                  ...p,
+                  blobUrl: blob.url,
+                  blobDownloadUrl: blob.downloadUrl,
+                  uploadProgress: 100,
+                }
               : p,
           ),
         );
@@ -147,6 +158,7 @@ export default function MineruUploader() {
           files: uploaded.map((u) => ({
             name: u.originalName,
             blobUrl: u.blobUrl,
+            blobDownloadUrl: u.blobDownloadUrl,
             data_id: u.dataId,
           })),
           model_version: modelVersion,
