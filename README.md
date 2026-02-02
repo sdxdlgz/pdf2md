@@ -8,8 +8,6 @@
 - 调用 Mineru 的“**文件批量上传解析**”接口（`/file-urls/batch` + PUT 上传）进行解析，产出 **Markdown / JSON / DOCX**
 - 下载时强制输出文件名与输入文件同名（仅扩展名不同：`.md/.json/.docx/.zip`）
 
-`mineru.txt` 已加入 `.gitignore`（不会上传到 GitHub，你可以本地保留笔记）。
-
 ## 架构（上传与转换隔离）
 
 1. **Upload / Storage**：浏览器把 PDF 上传到 Vercel Blob（统一存储）。
